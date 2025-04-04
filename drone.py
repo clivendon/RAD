@@ -93,33 +93,55 @@ def main():
         pane1 = window.select_pane(0)
         pane1.send_keys(f"nmap -p- --min-rate=1000 -Pn -T4 -oN nmap_fast_{target_ip}.txt {target_ip}")
 
-        # Split the window horizontally for the detailed nmap scan
-        pane2 = window.split_window(attach=False)
-        pane2.send_keys(f"nmap -p- -Pn -sC -sV -oN nmap_detailed_{target_ip}.txt {target_ip}")
-
-        # Wait for the fast nmap scan to complete and extract open ports
-        logging.info("Waiting for the fast nmap scan to complete...")
-        pane1.send_keys("sleep 10")  # Adjust the sleep duration as needed
+        # Wait for the fast nmap scan to complete
+        pane1.send_keys(f"while [ ! -f nmap_fast_{target_ip}.txt ]; do sleep 1; done"))
         pane1.send_keys(f"grep -oP '\\d+/open' nmap_fast_{target_ip}.txt | cut -d'/' -f1 > open_ports.txt")
-        pane1.send_keys("open_ports=$(cat open_ports.txt)")
 
-        # Run web-related tools only if web servers are detected
+        # Wait for the open_ports.txt file to be created        # Wait for the open_ports.txt file to be created
+        pane1.send_keys("while [ ! -f open_ports.txt ]; do sleep 1; done")]; do sleep 1; done")
+
+        # Run the detailed nmap scan in the same pane        # Run the detailed nmap scan in the same pane
+        pane1.send_keys(f"nmap -p $(cat open_ports.txt) -Pn -sC -sV -oN nmap_detailed_{target_ip}.txt {target_ip}")-sV -oN nmap_detailed_{target_ip}.txt {target_ip}")
+
+        # Wait for the detailed nmap scan to completehe detailed nmap scan to complete
+        pane1.send_keys(f"while [ ! -f nmap_detailed_{target_ip}.txt ]; do sleep 1; done")eys(f"while [ ! -f nmap_detailed_{target_ip}.txt ]; do sleep 1; done")
+
+        # Check for HTTP servers in the detailed nmap outputt
+        pane1.send_keys(f"grep -qi 'http' nmap_detailed_{target_ip}.txt && touch http_detected.txt")ed_{target_ip}.txt && touch http_detected.txt")
+
+        # Wait for the HTTP detection result        # Wait for the HTTP detection result
+        pane1.send_keys("while [ ! -f http_detected.txt ]; do sleep 1; done")xt ]; do sleep 1; done")
+
+        # Run web-related tools if HTTP servers are detected
+        pane2 = None        pane2 = None
         pane3 = None
         pane4 = None
-        pane5 = None
-        if pane1.send_keys("grep -qi 'http' nmap_detailed_{target_ip}.txt"):
+        pane1.send_keys("if [ -f http_detected.txt ]; then exit 0; else exit 1; fi")
+        if pane1.send_keys("test -f http_detected.txt"):ne1.send_keys("test -f http_detected.txt"):
             # Split the window horizontally for feroxbuster
-            pane3 = window.split_window(attach=False)
-            pane3.send_keys(f"feroxbuster -u http://{target_ip}:{web_servers[0]} -x txt,html,php -o feroxbuster_{target_ip}.txt")
+            pane2 = window.split_window(attach=False)            pane2 = window.split_window(attach=False)
+            pane2.send_keys(f"feroxbuster -u http://{target_ip} -x txt,html,php -o feroxbuster_{target_ip}.txt")eroxbuster -u http://{target_ip} -x txt,html,php -o feroxbuster_{target_ip}.txt")
 
-            # Split the window vertically for whatweb
-            pane4 = window.split_window(vertical=True, attach=False)
-            pane4.send_keys(f"whatweb http://{target_ip}:{web_servers[0]} > whatweb_{target_ip}.txt")
+            # Split the window vertically for whatweb            # Split the window vertically for whatweb
+            pane3 = window.split_window(vertical=True, attach=False)
+            pane3.send_keys(f"whatweb http://{target_ip} > whatweb_{target_ip}.txt")s(f"whatweb http://{target_ip} > whatweb_{target_ip}.txt")
 
-            # Split the window vertically for nikto
-            pane5 = window.split_window(vertical=True, attach=False)
-            pane5.send_keys(f"nikto -h http://{target_ip}:{web_servers[0]} -o nikto_{target_ip}.txt")
-        else:
+            # Split the window vertically for nikto            # Split the window vertically for nikto
+            pane4 = window.split_window(vertical=True, attach=False).split_window(vertical=True, attach=False)
+            pane4.send_keys(f"nikto -h http://{target_ip} -o nikto_{target_ip}.txt")  pane4.send_keys(f"nikto -h http://{target_ip} -o nikto_{target_ip}.txt")
+
+
+
+
+
+
+
+
+
+
+
+
+    main()if __name__ == "__main__":        logging.error(f"Error running reconnaissance process: {e}")    except Exception as e:        logging.info("Reconnaissance process started and session attached")        session.attach()        # Attach to the session            logging.info("No web servers detected. Skipping feroxbuster, whatweb, and nikto.")        else:        else:
             logging.info("No web servers detected. Skipping feroxbuster, whatweb, and nikto.")
 
         # Attach to the session
