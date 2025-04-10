@@ -1,54 +1,57 @@
 #!/usr/bin/env python3
+
+# Recon Automation Drone
+# This script automates the reconnaissance process using nmap and feroxbuster.
+# It creates a tmux session with separate panes for each tool and runs them in parallel.
 import subprocess
 import argparse
 import logging
 import ipaddress
+import time
+import os
+import re
 from libtmux import Server
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def get_open_ports(target_ip):
-    """Run a fast nmap scan to get all open ports."""
+def find_web_ports(nmap_output_file):
+    """Parse nmap output to find web server ports"""
+    web_ports = []
+    if not os.path.exists(nmap_output_file):
+        return web_ports
+    
     try:
-        result = subprocess.run(
-            ["nmap", "-p-", "--min-rate=1000", "-Pn", "-T4", target_ip],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            check=True
-        )
-        # Extract open ports from the nmap output
-        open_ports = [
-            line.split('/')[0]
-            for line in result.stdout.splitlines()
-            if line.startswith(tuple("0123456789"))
-        ]
-        return ",".join(open_ports)
-    except subprocess.CalledProcessError as e:
-        logging.error(f"Error running nmap to get open ports: {e}")
-        return ""
-
-def detect_web_servers(target_ip, open_ports):
-    """Run a detailed nmap scan and check for web servers."""
-    try:
-        result = subprocess.run(
-            ["nmap", "-p", open_ports, "-Pn", "-sC", "-sV", target_ip],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            check=True
-        )
-        # Check for web-related services in the nmap output
-        web_servers = []
-        for line in result.stdout.splitlines():
-            if "http" in line.lower():  # Look for "http" in the service description
-                port = line.split("/")[0]
-                web_servers.append(port)
-        return web_servers
-    except subprocess.CalledProcessError as e:
-        logging.error(f"Error running nmap service scan: {e}")
-        return []
+        with open(nmap_output_file, 'r') as f:
+            content = f.read()
+            
+        # Check if scan is still running
+        if "Nmap done:" not in content:
+            return None  # Scan still in progress
+            
+        # Look for web servers
+        # Pattern matches port numbers followed by "http" services
+        port_pattern = r'(\d+)\/tcp\s+open\s+(http|https|ssl\/http|http-alt|https-alt)'
+        http_matches = re.finditer(port_pattern, content, re.IGNORECASE)
+        
+        for match in http_matches:
+            port = match.group(1)
+            service = match.group(2)
+            web_ports.append(port)
+            
+        # Also check for ports where the service name contains "http"
+        service_pattern = r'(\d+)\/tcp\s+open\s+\w+\s+.*http'
+        service_matches = re.finditer(service_pattern, content, re.IGNORECASE)
+        
+        for match in service_matches:
+            port = match.group(1)
+            if port not in web_ports:
+                web_ports.append(port)
+                
+    except Exception as e:
+        logging.error(f"Error parsing nmap output: {e}")
+        
+    return web_ports
 
 def main():
     parser = argparse.ArgumentParser(description="Automate reconnaissance process.")
@@ -56,6 +59,7 @@ def main():
     args = parser.parse_args()
 
     target_ip = args.target
+    nmap_output_file = f"nmap_{target_ip}.txt"
 
     # Validate the target IP address or domain
     try:
@@ -64,90 +68,55 @@ def main():
         logging.error("Invalid IP address or domain")
         return
 
-    # Check if required tools are installed
-    dependencies = ["nmap", "feroxbuster", "whatweb", "nikto"]
+    # Check if nmap, feroxbuster, and tmux are installed
+    dependencies = ["nmap", "feroxbuster", "tmux"]
     for dependency in dependencies:
         try:
-            subprocess.run([dependency, "--version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-        except (FileNotFoundError, subprocess.CalledProcessError):
-            logging.error(f"{dependency} is not installed or not working correctly")
+            subprocess.run([dependency, "--version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except FileNotFoundError:
+            logging.error(f"{dependency} is not installed")
             return
 
-    # Create a new tmux session or attach to an existing one
+    # Create a new tmux session
     try:
         server = Server()
-        session_name = "recon"
-
-        # Check if a session with the same name already exists
-        if server.has_session(session_name):
-            logging.info(f"Session {session_name} already exists. Attaching to it...")
-            session = server.find_where({"session_name": session_name})
-        else:
-            # Create a new session
-            session = server.new_session(session_name, attach=False)
-
-        # Use the default window (index 0)
+        
+        # Kill existing session if it exists
+        try:
+            existing_session = server.find_where({"session_name": "Drone"})
+            if existing_session:
+                existing_session.kill_session()
+        except:
+            pass
+        
+        # Create new session with attach=False
+        session = server.new_session(session_name="Drone", attach=False, window_name="Recon")
+        logging.info("New tmux session created")
+        
+        # Give tmux a moment to initialize
+        time.sleep(0.5)
+        
+        # Get the initial window and pane for nmap
         window = session.attached_window
-
-        # Send the fast nmap scan command to the first pane
-        pane1 = window.select_pane(0)
-        pane1.send_keys(f"nmap -p- --min-rate=1000 -Pn -T4 -oN nmap_fast_{target_ip}.txt {target_ip}")
-
-        # Wait for the fast nmap scan to complete
-        pane1.send_keys(f"while [ ! -f nmap_fast_{target_ip}.txt ]; do sleep 1; done"))
-        pane1.send_keys(f"grep -oP '\\d+/open' nmap_fast_{target_ip}.txt | cut -d'/' -f1 > open_ports.txt")
-
-        # Wait for the open_ports.txt file to be created        # Wait for the open_ports.txt file to be created
-        pane1.send_keys("while [ ! -f open_ports.txt ]; do sleep 1; done")]; do sleep 1; done")
-
-        # Run the detailed nmap scan in the same pane        # Run the detailed nmap scan in the same pane
-        pane1.send_keys(f"nmap -p $(cat open_ports.txt) -Pn -sC -sV -oN nmap_detailed_{target_ip}.txt {target_ip}")-sV -oN nmap_detailed_{target_ip}.txt {target_ip}")
-
-        # Wait for the detailed nmap scan to completehe detailed nmap scan to complete
-        pane1.send_keys(f"while [ ! -f nmap_detailed_{target_ip}.txt ]; do sleep 1; done")eys(f"while [ ! -f nmap_detailed_{target_ip}.txt ]; do sleep 1; done")
-
-        # Check for HTTP servers in the detailed nmap outputt
-        pane1.send_keys(f"grep -qi 'http' nmap_detailed_{target_ip}.txt && touch http_detected.txt")ed_{target_ip}.txt && touch http_detected.txt")
-
-        # Wait for the HTTP detection result        # Wait for the HTTP detection result
-        pane1.send_keys("while [ ! -f http_detected.txt ]; do sleep 1; done")xt ]; do sleep 1; done")
-
-        # Run web-related tools if HTTP servers are detected
-        pane2 = None        pane2 = None
-        pane3 = None
-        pane4 = None
-        pane1.send_keys("if [ -f http_detected.txt ]; then exit 0; else exit 1; fi")
-        if pane1.send_keys("test -f http_detected.txt"):ne1.send_keys("test -f http_detected.txt"):
-            # Split the window horizontally for feroxbuster
-            pane2 = window.split_window(attach=False)            pane2 = window.split_window(attach=False)
-            pane2.send_keys(f"feroxbuster -u http://{target_ip} -x txt,html,php -o feroxbuster_{target_ip}.txt")eroxbuster -u http://{target_ip} -x txt,html,php -o feroxbuster_{target_ip}.txt")
-
-            # Split the window vertically for whatweb            # Split the window vertically for whatweb
-            pane3 = window.split_window(vertical=True, attach=False)
-            pane3.send_keys(f"whatweb http://{target_ip} > whatweb_{target_ip}.txt")s(f"whatweb http://{target_ip} > whatweb_{target_ip}.txt")
-
-            # Split the window vertically for nikto            # Split the window vertically for nikto
-            pane4 = window.split_window(vertical=True, attach=False).split_window(vertical=True, attach=False)
-            pane4.send_keys(f"nikto -h http://{target_ip} -o nikto_{target_ip}.txt")  pane4.send_keys(f"nikto -h http://{target_ip} -o nikto_{target_ip}.txt")
-
-
-
-
-
-
-
-
-
-
-
-
-    main()if __name__ == "__main__":        logging.error(f"Error running reconnaissance process: {e}")    except Exception as e:        logging.info("Reconnaissance process started and session attached")        session.attach()        # Attach to the session            logging.info("No web servers detected. Skipping feroxbuster, whatweb, and nikto.")        else:        else:
-            logging.info("No web servers detected. Skipping feroxbuster, whatweb, and nikto.")
-
-        # Attach to the session
-        session.attach()
-
-        logging.info("Reconnaissance process started and session attached")
+        nmap_pane = window.attached_pane
+        nmap_pane.send_keys("clear")
+        nmap_pane.send_keys(f"echo 'NMAP SCAN' && nmap -sC -sV -oN {nmap_output_file} {target_ip} -v -T4 --min-rate 1000")
+        
+        # Create a new pane for monitoring web servers
+        ferox_pane = window.split_window(vertical=False)
+        ferox_pane.send_keys("clear")
+        ferox_pane.send_keys(f"echo 'Waiting for NMAP to discover web servers...'")
+        
+        # Set the layout to tiled for equal pane sizes
+        window.select_layout("tiled")
+        
+        # Start the wait_and_scan script with proper environment variables
+        ferox_pane.send_keys(f"export NMAP_OUTPUT_FILE='{nmap_output_file}'; export TARGET_IP='{target_ip}'; bash ./feroxscript.sh")
+        
+        # Attach to the tmux session
+        logging.info("Attaching to tmux session...")
+        os.system("tmux attach -t Drone")
+        
     except Exception as e:
         logging.error(f"Error running reconnaissance process: {e}")
 
